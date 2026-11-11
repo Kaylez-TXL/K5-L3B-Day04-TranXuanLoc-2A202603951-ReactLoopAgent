@@ -1,4 +1,4 @@
-"""Agent loop cơ bản cho CP2. Xem contract trong GUIDE.md."""
+"""Agent loop với xử lý lỗi và trace cho CP3. Xem GUIDE.md."""
 
 import json
 
@@ -22,7 +22,15 @@ def run_agent(question, provider, tools, max_steps=6):
 
     # Một step là một lần gọi model, có thể chứa nhiều tool calls.
     for step in range(1, max_steps + 1):
-        response = provider.complete(messages, SCHEMAS)
+        try:
+            response = provider.complete(messages, SCHEMAS)
+        except (RuntimeError, ValueError, TypeError, OSError) as exc:
+            # Không ghi nội dung exception vì có thể chứa dữ liệu yêu cầu/key.
+            error = f'Không gọi được provider ({type(exc).__name__}).'
+            trace.append({'event': 'provider_error', 'step': step,
+                          'error': type(exc).__name__})
+            return {'status': 'error', 'answer': '', 'trace': trace,
+                    'usage': usage, 'error': error}
         messages.append(response['message'])
         usage.append(response.get('usage', {}))
         calls = response['calls']
@@ -36,8 +44,21 @@ def run_agent(question, provider, tools, max_steps=6):
         if calls:
             # Giữ assistant message ở trước mọi kết quả tool của lượt này.
             for call in calls:
-                arguments = json.loads(call['arguments'])
-                result = tools.execute(call['name'], arguments)
+                arguments = call['arguments']
+                try:
+                    arguments = json.loads(arguments)
+                    if not isinstance(arguments, dict):
+                        raise ValueError('Arguments phải là JSON object.')
+                except (ValueError, TypeError):
+                    result = {'ok': False, 'error': 'INVALID_ARGUMENTS',
+                              'message': 'Arguments phải là JSON object hợp lệ.'}
+                else:
+                    try:
+                        result = tools.execute(call['name'], arguments)
+                    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+                        # Lỗi tool là observation để model có thể phục hồi.
+                        result = {'ok': False, 'error': type(exc).__name__,
+                                  'message': 'Không thể thực thi tool.'}
                 trace.append({
                     'event': 'tool', 'step': step, 'name': call['name'],
                     'arguments': arguments, 'result': result,
