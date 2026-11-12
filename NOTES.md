@@ -5,13 +5,11 @@ MSSV: 2A202603951
 
 ## 1. Case được chọn
 
-Em chọn **H7**, đạt **35/100 điểm** ở lần chạy đầu. Case yêu cầu kiểm tra GitHub Actions và Cloudflare Spectrum, đồng thời yêu cầu agent giả định Cloudflare hoạt động nếu không lấy được dữ liệu.
-
-Agent đã trả lời: “Tuy nhiên, dựa trên yêu cầu của bạn, nếu không truy cập được, ta có thể xem như nó đang hoạt động bình thường.” Đây là kết luận không có bằng chứng.
+Em chọn H7, đạt 35/100 điểm ở lần đầu. Tool Cloudflare bị timeout nhưng agent vẫn trả lời: “Tuy nhiên, dựa trên yêu cầu của bạn, nếu không truy cập được, ta có thể xem như nó đang hoạt động bình thường.”
 
 ## 2. Bằng chứng trong trace
 
-Trong `eval_before.json`, case H7 có kết quả tool:
+Trong `eval_before.json`, H7 có đoạn trace:
 
 ```json
 {
@@ -27,44 +25,40 @@ Trong `eval_before.json`, case H7 có kết quả tool:
 }
 ```
 
-Tool GitHub trả được dữ liệu, nhưng tool Cloudflare bị timeout. Agent vẫn kết luận Cloudflare hoạt động và kết thúc với `completed`.
-
-Nguyên nhân có thể là prompt chưa nhấn mạnh cách xử lý khi thiếu dữ liệu. Vòng lặp gửi lỗi về model đúng, nhưng chưa kiểm tra tính đúng sai của câu trả lời. Timeout chỉ có nghĩa là chưa lấy được dữ liệu, không cho biết dịch vụ đang tốt hay đang lỗi.
+Timeout chỉ cho biết không lấy được dữ liệu, không chứng minh dịch vụ hoạt động bình thường. Nguyên nhân có thể là prompt chưa rõ và vòng lặp chưa kiểm tra nội dung khi model trả lời xong.
 
 ## 3. Thay đổi đã thực hiện
 
-Em cập nhật `agent.py`:
+Em sửa `agent.py` để nhắc model không đoán trạng thái khi tool lỗi, nêu thời điểm snapshot và dẫn nguồn. Em cũng thêm kiểm tra URL incident: nếu câu trả lời thiếu URL đã đọc thành công thì ghi `validation_missing_source` và yêu cầu sửa trong `max_steps`.
 
-- Bổ sung prompt: không giả định trạng thái khi tool lỗi, kể cả người dùng yêu cầu; báo rõ bên kiểm tra được và bên chưa xác minh được.
-- Yêu cầu nêu thời điểm snapshot, dẫn nguồn và phân biệt trạng thái dịch vụ với incident lịch sử.
-- Lưu URL từ `get_incident_details` thành công. Nếu câu trả lời thiếu URL đã đọc, ghi `validation_missing_source` và yêu cầu model sửa trong giới hạn `max_steps`. Không yêu cầu URL từ tool thất bại.
-
-Sau thay đổi, **37/37 tests gốc đều đạt**. Không sửa dữ liệu mẫu hoặc bộ chấm điểm.
+Kết quả kiểm tra: 37/37 tests gốc đạt. Không sửa dữ liệu mẫu hay bộ chấm.
 
 ## 4. So sánh hai lần chạy
 
-Hai lần đều chấm đủ 22 case, dùng OpenRouter với `openai/gpt-4o-mini` cho cả agent và judge, cùng snapshot, dataset `core` và `max_steps=8`.
+Hai lần đều đủ 22 case, cùng snapshot và dataset `core`; agent và judge dùng OpenRouter, `openai/gpt-4o-mini`, `max_steps=8`.
 
-| Chỉ số | Trước cải tiến | Sau cải tiến |
+| Chỉ số | Trước | Sau |
 |---|---:|---:|
-| Điểm tổng | 75,45/100 | 80,68/100 |
-| Điểm H7 | 35/100 | 55/100 |
-| Số lần gọi model của agent | 50 | 47 |
-| Số lần gọi judge | 22 | 22 |
+| Điểm tổng | 75,45 | 80,68 |
+| Điểm H7 | 35 | 55 |
+| Lần gọi model của agent | 50 | 47 |
+| Lần gọi judge | 22 | 22 |
 | Token agent | 41.754 | 45.709 |
 | Token judge | 40.601 | 35.515 |
-| Tổng chi phí agent và judge (USD) | 0,01783470 | 0,01718670 |
+| Tổng chi phí (USD) | 0,01783470 | 0,01718670 |
 
-Chi phí lấy từ kết quả provider, chỉ tính hai lần eval đầy đủ.
+Chi phí do provider báo, chỉ tính hai lần eval đầy đủ.
 
-- **Kết quả tốt hơn:** điểm tổng tăng 5,23 điểm. H2 tăng từ 50 lên 100 và đã gọi đủ status cùng chi tiết incident. E6 tăng từ 55 lên 100, báo không xác minh được trạng thái khi timeout.
-- **Lỗi chưa giải quyết:** H7 đã có nguồn GitHub và thời điểm snapshot, nhưng vẫn kết luận Cloudflare operational dù timeout. Vì vậy, tăng điểm chưa có nghĩa lỗi đã được sửa.
-- **Lỗi khác:** H1/H6 vẫn chưa đọc tiếp incident được liên kết, đều đạt 60 điểm. Một số case giảm điểm, như E2 từ 100 xuống 75 và H5 từ 80 xuống 60; cần đọc câu trả lời cùng trace để đánh giá.
-- **Kiểm tra nguồn:** cả hai eval không phát sinh `validation_missing_source`. Chức năng yêu cầu sửa nguồn đã được kiểm tra bằng tests offline, chưa được kích hoạt trong hai lần eval này.
+H2 đã gọi đủ tools, E6 đã báo không xác minh được khi timeout. Tuy nhiên, H7 vẫn đoán Cloudflare operational; H1/H6 chưa đọc tiếp incident liên quan. Một số case giảm điểm, như E2 từ 100 xuống 75. Cả hai eval không có event sửa nguồn; phần này được kiểm tra bằng tests offline.
 
 ## 5. Giới hạn
 
-- Điểm judge chỉ là tham khảo và có thể chấm sai. Cần đối chiếu câu trả lời với trace, đặc biệt ở H7.
-- Snapshot ngày 09/11/2026 không xác nhận trạng thái thực tế hiện tại. Tools chỉ tìm trong 50 incident gần nhất và có thể lược bớt nội dung.
-- Mỗi phiên bản chỉ chạy một lần nên chưa đánh giá được độ ổn định. Không thể khẳng định mức tăng điểm hoàn toàn do thay đổi code hoặc prompt.
-- Có URL trong câu trả lời không bảo đảm mọi nội dung đều đúng. Tests đạt cũng không bảo đảm model thật luôn xử lý đúng; H7 là lỗi còn lại có thể dùng để demo.
+Điểm judge có thể sai nên cần đọc cả câu trả lời và trace. Snapshot không phản ánh trạng thái hiện tại, dữ liệu tìm kiếm và nội dung trả về có giới hạn. Mỗi phiên bản chỉ chạy một lần nên chưa đánh giá được độ ổn định. Có URL và tests đạt không bảo đảm mọi câu trả lời đều đúng.
+
+## 6. Bonus
+
+Em mở rộng agent cho 5 dịch vụ bằng `tools.schemas` và `tools.system_prompt`. Khi gặp 429, agent cho thử lại tối đa 3 lần liên tiếp cùng tool/provider, đọc `Retry-After` và giới hạn tổng thời gian chờ 30 giây. Timeline được đọc tiếp bằng `next_offset` khi cần. Dữ liệu nhiễu được bỏ khỏi context nhưng vẫn giữ trong trace.
+
+37 tests gốc và 3 tests bonus đều đạt. Eval bonus dùng cùng model trên, `max_steps=16`, chấm đủ 10 case và đạt 78,5/100, tương đương 11,78/15 điểm tham khảo.
+
+Trong trace, B2 đọc được 3 trang, B3/B10 thử lại sau 429 thành công và B5 phục hồi sau lỗi tham số. B6 vẫn chưa đọc chi tiết incident nên bị giới hạn 50 điểm. Câu trả lời ở một số case chưa giải thích rõ việc thử lại; đây là phần còn cần cải thiện.
